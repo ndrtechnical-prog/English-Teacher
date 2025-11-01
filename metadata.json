@@ -1,0 +1,7 @@
+{
+  "name": "Gemini English Tutor",
+  "description": "Have a real-time voice conversation with an AI English teacher. Practice your speaking and listening skills with instant feedback.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
