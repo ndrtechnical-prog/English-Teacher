@@ -2,23 +2,391 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <base target="_top">
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Gemini English Tutor</title>
   <script src="https://cdn.tailwindcss.com"></script>
-<script type="importmap">
+  <script type="importmap">
 {
   "imports": {
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0",
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0"
+    "react/": "https://aistudiocdn.com/react@^19.2.0/"
   }
 }
 </script>
 </head>
-<body class="bg-slate-900 text-white">
-  <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+<body class="bg-slate-900 text-white font-sans">
+
+  <div class="min-h-screen bg-slate-900 flex flex-col items-center justify-between p-4">
+    <header class="w-full max-w-4xl text-center py-4">
+      <h1 class="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-300">
+        Gemini English Tutor
+      </h1>
+      <p class="text-slate-400 mt-2">Practice your English by having a real conversation with an AI tutor.</p>
+    </header>
+
+    <main class="w-full max-w-4xl flex-grow bg-slate-800/50 rounded-xl shadow-2xl flex flex-col my-4 overflow-hidden">
+      <div id="transcript-container" class="flex-grow p-4 md:p-6 overflow-y-auto space-y-4">
+        <div class="flex items-center justify-center h-full text-slate-500">
+          Your conversation will appear here.
+        </div>
+      </div>
+    </main>
+
+    <footer class="w-full max-w-4xl flex flex-col items-center justify-center py-4">
+      <div id="control-button-container" class="mb-4">
+        <!-- Control button will be rendered here -->
+      </div>
+      <p id="status-text" class="text-center transition-opacity duration-300 text-slate-400">
+        <!-- Status text will be rendered here -->
+      </p>
+    </footer>
+  </div>
+
+  <script type="module">
+    import { GoogleGenAI, Modality } from '@google/genai';
+
+    // --- DOM Elements ---
+    const transcriptContainer = document.getElementById('transcript-container');
+    const controlButtonContainer = document.getElementById('control-button-container');
+    const statusText = document.getElementById('status-text');
+
+    // --- API Key (from Apps Script backend) ---
+    const API_KEY = '<?!= getApiKey() ?>';
+    if (!API_KEY) {
+      statusText.textContent = "Error: API_KEY is not set. Please configure it in the Apps Script project settings.";
+      statusText.className = "text-center text-red-400";
+    }
+
+    // --- State Management (replaces React state/refs) ---
+    let state = {
+      status: 'idle', // 'idle' | 'connecting' | 'listening' | 'speaking' | 'error'
+      transcript: [],
+      errorMessage: '',
+    };
+
+    let sessionPromise = null;
+    let inputAudioContext = null;
+    let outputAudioContext = null;
+    let mediaStream = null;
+    let scriptProcessor = null;
+    let sources = new Set();
+    let nextStartTime = 0;
+    let currentInputTranscription = '';
+    let currentOutputTranscription = '';
+
+    // --- Audio Utility Functions (from utils/audio.ts) ---
+    function encode(bytes) {
+      let binary = '';
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    function decode(base64) {
+      const binaryString = atob(base64);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    async function decodeAudioData(data, ctx, sampleRate, numChannels) {
+      const dataInt16 = new Int16Array(data.buffer);
+      const frameCount = dataInt16.length / numChannels;
+      const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+      for (let channel = 0; channel < numChannels; channel++) {
+        const channelData = buffer.getChannelData(channel);
+        for (let i = 0; i < frameCount; i++) {
+          channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+        }
+      }
+      return buffer;
+    }
+
+    // --- UI Rendering Functions (replaces React components) ---
+    const Icons = {
+      Mic: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-10 h-10"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`,
+      Stop: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-10 h-10"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>`,
+      Spinner: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="animate-spin w-10 h-10"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`,
+    };
+
+    function renderControlButton() {
+      controlButtonContainer.innerHTML = '';
+      let button;
+      switch (state.status) {
+        case 'idle':
+        case 'error':
+          button = document.createElement('button');
+          button.innerHTML = Icons.Mic;
+          button.className = "w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center text-white hover:bg-blue-700 transition-all duration-200 shadow-lg focus:outline-none focus:ring-4 focus:ring-blue-500/50";
+          button.setAttribute('aria-label', 'Start conversation');
+          button.onclick = startConversation;
+          break;
+        case 'connecting':
+          button = document.createElement('div');
+          button.innerHTML = Icons.Spinner;
+          button.className = "w-20 h-20 bg-gray-600 rounded-full flex items-center justify-center text-white transition-all duration-200 shadow-lg";
+          break;
+        default:
+          button = document.createElement('button');
+          button.innerHTML = Icons.Stop;
+          button.className = "w-20 h-20 bg-red-600 rounded-full flex items-center justify-center text-white hover:bg-red-700 transition-all duration-200 shadow-lg focus:outline-none focus:ring-4 focus:ring-red-500/50";
+          button.setAttribute('aria-label', 'Stop conversation');
+          button.onclick = stopConversation;
+          break;
+      }
+      controlButtonContainer.appendChild(button);
+    }
+
+    function renderStatusText() {
+      let text = '';
+      switch (state.status) {
+        case 'connecting':
+          text = 'Connecting to the classroom...';
+          break;
+        case 'listening':
+          text = 'Listening... Speak now!';
+          break;
+        case 'speaking':
+          text = 'Teacher is speaking...';
+          break;
+        case 'error':
+          text = `Error: ${state.errorMessage}`;
+          break;
+        default:
+          text = 'Press the microphone to start your lesson.';
+          break;
+      }
+      statusText.textContent = text;
+      statusText.className = `text-center transition-opacity duration-300 ${state.status === 'error' ? 'text-red-400' : 'text-slate-400'}`;
+    }
+
+    function renderTranscript() {
+        if (state.transcript.length === 0) {
+            transcriptContainer.innerHTML = `<div class="flex items-center justify-center h-full text-slate-500">Your conversation will appear here.</div>`;
+            return;
+        }
+        
+        transcriptContainer.innerHTML = '';
+        state.transcript.forEach(entry => {
+            const entryWrapper = document.createElement('div');
+            entryWrapper.className = `flex ${entry.speaker === 'You' ? 'justify-end' : 'justify-start'}`;
+            
+            const entryBubble = document.createElement('div');
+            entryBubble.className = `max-w-xs md:max-w-md lg:max-w-xl p-3 rounded-2xl ${entry.speaker === 'You' ? 'bg-blue-600 text-white rounded-br-lg' : 'bg-slate-700 text-slate-200 rounded-bl-lg'}`;
+            
+            const speakerP = document.createElement('p');
+            speakerP.className = 'font-bold text-sm mb-1';
+            speakerP.textContent = entry.speaker;
+            
+            const textP = document.createElement('p');
+            textP.textContent = entry.text;
+            
+            entryBubble.appendChild(speakerP);
+            entryBubble.appendChild(textP);
+            entryWrapper.appendChild(entryBubble);
+            transcriptContainer.appendChild(entryWrapper);
+        });
+        transcriptContainer.scrollTop = transcriptContainer.scrollHeight;
+    }
+
+    function setState(newState) {
+      const oldStatus = state.status;
+      state = { ...state, ...newState };
+
+      if (newState.status !== oldStatus) {
+        renderControlButton();
+        renderStatusText();
+      }
+      if (newState.transcript) {
+        renderTranscript();
+      }
+    }
+
+    // --- Core Application Logic (replaces React hooks and methods) ---
+
+    function stopAllPlayback() {
+        if (sources) {
+            for (const source of sources.values()) {
+                source.stop();
+                sources.delete(source);
+            }
+            nextStartTime = 0;
+        }
+    }
+
+    function cleanUpAudio() {
+        stopAllPlayback();
+
+        mediaStream?.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+        
+        if (scriptProcessor) {
+          scriptProcessor.disconnect();
+          scriptProcessor = null;
+        }
+
+        if (inputAudioContext && inputAudioContext.state !== 'closed') {
+          inputAudioContext.close().catch(console.error);
+        }
+        inputAudioContext = null;
+        
+        if (outputAudioContext && outputAudioContext.state !== 'closed') {
+          outputAudioContext.close().catch(console.error);
+        }
+        outputAudioContext = null;
+    }
+
+    async function stopConversation() {
+      if (state.status === 'idle') return;
+
+      setState({ status: 'idle' });
+      if (sessionPromise) {
+        try {
+          const session = await sessionPromise;
+          session.close();
+        } catch (e) {
+          console.error("Error closing session:", e);
+        }
+        sessionPromise = null;
+      }
+      cleanUpAudio();
+    }
+
+    async function startConversation() {
+      if (!API_KEY) return;
+      
+      setState({ transcript: [], errorMessage: '', status: 'connecting' });
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        const ai = new GoogleGenAI({ apiKey: API_KEY });
+        
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        inputAudioContext = new AudioContext({ sampleRate: 16000 });
+        outputAudioContext = new AudioContext({ sampleRate: 24000 });
+        
+        sessionPromise = ai.live.connect({
+          model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+          config: {
+            responseModalities: [Modality.AUDIO],
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            systemInstruction: 'You are a friendly and patient English teacher. Your student is learning English as a second language. Keep your responses concise, clear, and encouraging. Correct mistakes gently and explain them simply. Ask questions to keep the conversation going.',
+          },
+          callbacks: {
+            onopen: () => {
+              setState({ status: 'listening' });
+              const source = inputAudioContext.createMediaStreamSource(mediaStream);
+              scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
+
+              scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                
+                const l = inputData.length;
+                const int16 = new Int16Array(l);
+                for (let i = 0; i < l; i++) {
+                  int16[i] = inputData[i] * 32768;
+                }
+
+                const pcmBlob = {
+                  data: encode(new Uint8Array(int16.buffer)),
+                  mimeType: 'audio/pcm;rate=16000',
+                };
+                
+                sessionPromise.then((session) => {
+                  session.sendRealtimeInput({ media: pcmBlob });
+                });
+              };
+              source.connect(scriptProcessor);
+              scriptProcessor.connect(inputAudioContext.destination);
+            },
+            onmessage: async (message) => {
+              const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+              if (audioData) {
+                setState({ status: 'speaking' });
+                if (outputAudioContext) {
+                    nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
+                    const audioBuffer = await decodeAudioData(decode(audioData), outputAudioContext, 24000, 1);
+                    const source = outputAudioContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(outputAudioContext.destination);
+                    source.addEventListener('ended', () => {
+                        sources.delete(source);
+                        if (sources.size === 0 && state.status !== 'idle') {
+                            setState({ status: 'listening' });
+                        }
+                    });
+                    source.start(nextStartTime);
+                    nextStartTime += audioBuffer.duration;
+                    sources.add(source);
+                }
+              }
+
+              if (message.serverContent?.inputTranscription) {
+                currentInputTranscription += message.serverContent.inputTranscription.text;
+              }
+              if (message.serverContent?.outputTranscription) {
+                currentOutputTranscription += message.serverContent.outputTranscription.text;
+              }
+              if (message.serverContent?.turnComplete) {
+                const fullInput = currentInputTranscription.trim();
+                const fullOutput = currentOutputTranscription.trim();
+                
+                let newTranscript = [...state.transcript];
+                if(fullInput) {
+                  newTranscript.push({ speaker: 'You', text: fullInput });
+                }
+                if(fullOutput) {
+                  newTranscript.push({ speaker: 'Teacher', text: fullOutput });
+                }
+                setState({ transcript: newTranscript });
+
+                currentInputTranscription = '';
+                currentOutputTranscription = '';
+              }
+
+              if (message.serverContent?.interrupted) {
+                stopAllPlayback();
+              }
+            },
+            onerror: (e) => {
+              console.error("Session error:", e);
+              setState({ errorMessage: `An error occurred: ${e.message || 'Unknown error'}. Please try again.`, status: 'error' });
+              stopConversation();
+            },
+            onclose: () => {
+              console.log("Session closed.");
+              cleanUpAudio();
+              if(state.status !== 'idle') {
+                setState({ status: 'idle' });
+              }
+            },
+          },
+        });
+      } catch (err) {
+        console.error('Failed to start conversation:', err);
+        setState({ errorMessage: `Failed to start: ${err.message}. Make sure microphone access is allowed.`, status: 'error' });
+      }
+    }
+
+    // --- Initial Setup ---
+    window.addEventListener('DOMContentLoaded', () => {
+      renderControlButton();
+      renderStatusText();
+    });
+
+    window.addEventListener('beforeunload', stopConversation);
+
+  </script>
 </body>
 </html>

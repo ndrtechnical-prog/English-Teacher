@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
+// Fix: Removed 'LiveSession' from imports as it's not an exported member.
+import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 import type { TranscriptEntry, Status } from './types';
 import { encode, decode, decodeAudioData } from './utils/audio';
 import MicIcon from './components/MicIcon';
@@ -12,7 +13,8 @@ const App: React.FC = () => {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState<string>('');
 
-  const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
+  // Fix: Changed type from LiveSession to any as LiveSession is not exported.
+  const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
   const inputAudioContextRef = useRef<AudioContext | null>(null);
@@ -105,18 +107,26 @@ const App: React.FC = () => {
             const scriptProcessor = inputAudioContextRef.current!.createScriptProcessor(4096, 1, 1);
             scriptProcessorRef.current = scriptProcessor;
 
+            // Fix: Refactored to follow Gemini API guidelines for sending audio data.
+            // Using the local sessionPromise avoids race conditions and stale closures.
+            // The blob creation is now more performant.
             scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
               const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+              
+              const l = inputData.length;
+              const int16 = new Int16Array(l);
+              for (let i = 0; i < l; i++) {
+                int16[i] = inputData[i] * 32768;
+              }
+
               const pcmBlob: Blob = {
-                data: encode(new Uint8Array(new Int16Array(inputData.map(x => x * 32768)).buffer)),
+                data: encode(new Uint8Array(int16.buffer)),
                 mimeType: 'audio/pcm;rate=16000',
               };
               
-              if (sessionPromiseRef.current) {
-                sessionPromiseRef.current.then((session) => {
-                  session.sendRealtimeInput({ media: pcmBlob });
-                });
-              }
+              sessionPromise.then((session) => {
+                session.sendRealtimeInput({ media: pcmBlob });
+              });
             };
             source.connect(scriptProcessor);
             scriptProcessor.connect(inputAudioContextRef.current!.destination);
