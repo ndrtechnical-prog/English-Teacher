@@ -98,7 +98,12 @@ const App: React.FC = () => {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          systemInstruction: 'You are a friendly and patient English teacher. Your student is learning English as a second language. Keep your responses concise, clear, and encouraging. Correct mistakes gently and explain them simply. Ask questions to keep the conversation going.',
+          systemInstruction: `You are a friendly and patient AI English teacher. Your student is learning English as a second language. Your goal is to make the conversation feel natural and engaging.
+
+1. **Adapt your style:** Mirror the student's response length and complexity. If they use simple, short sentences, you should too. If they speak more fluently, you can have a more complex conversation.
+2. **Be a great conversation partner:** Don't just ask simple follow-up questions. Introduce new topics, ask about their day, hobbies, or opinions on simple subjects. You can also suggest fun scenarios, like "Let's imagine we are planning a weekend trip. Where should we go?".
+3. **Teach gently:** Keep your responses clear and encouraging. If the student makes a mistake, correct it gently and explain the rule simply. For example, say "That was a great sentence! A slightly more natural way to say it would be...".
+4. **Keep it concise:** Even when adapting, aim to keep your turns in the conversation relatively short to allow the student more time to speak.`,
         },
         callbacks: {
           onopen: () => {
@@ -236,7 +241,7 @@ const App: React.FC = () => {
       return (
         <button
           onClick={startConversation}
-          className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center text-white hover:bg-blue-700 transition-all duration-200 shadow-lg focus:outline-none focus:ring-4 focus:ring-blue-500/50"
+          className="w-20 h-20 bg-gradient-to-br from-sky-500 to-blue-600 rounded-full flex items-center justify-center text-white hover:from-sky-600 hover:to-blue-700 transition-all duration-300 shadow-lg hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-sky-500/50"
           aria-label="Start conversation"
         >
           <MicIcon className="w-10 h-10" />
@@ -255,7 +260,7 @@ const App: React.FC = () => {
     return (
       <button
         onClick={stopConversation}
-        className="w-20 h-20 bg-red-600 rounded-full flex items-center justify-center text-white hover:bg-red-700 transition-all duration-200 shadow-lg focus:outline-none focus:ring-4 focus:ring-red-500/50"
+        className="w-20 h-20 bg-gradient-to-br from-red-500 to-rose-600 rounded-full flex items-center justify-center text-white hover:from-red-600 hover:to-rose-700 transition-all duration-300 shadow-lg hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-red-500/50"
         aria-label="Stop conversation"
       >
         <StopIcon className="w-10 h-10" />
@@ -264,15 +269,15 @@ const App: React.FC = () => {
   };
   
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-between p-4 font-sans">
+    <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 flex flex-col items-center justify-between p-4 font-sans">
       <header className="w-full max-w-4xl text-center py-4">
-        <h1 className="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-300">
+        <h1 className="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-cyan-300">
           Gemini English Tutor
         </h1>
         <p className="text-slate-400 mt-2">Practice your English by having a real conversation with an AI tutor.</p>
       </header>
 
-      <main className="w-full max-w-4xl flex-grow bg-slate-800/50 rounded-xl shadow-2xl flex flex-col my-4 overflow-hidden">
+      <main className="w-full max-w-4xl flex-grow bg-slate-800/50 rounded-xl shadow-2xl flex flex-col my-4 overflow-hidden border border-slate-700/50">
         <div className="flex-grow p-4 md:p-6 overflow-y-auto space-y-4">
           {transcript.length === 0 && (
             <div className="flex items-center justify-center h-full text-slate-500">
@@ -281,7 +286,7 @@ const App: React.FC = () => {
           )}
           {transcript.map((entry, index) => (
             <div key={index} className={`flex ${entry.speaker === 'You' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-xs md:max-w-md lg:max-w-xl p-3 rounded-2xl ${entry.speaker === 'You' ? 'bg-blue-600 text-white rounded-br-lg' : 'bg-slate-700 text-slate-200 rounded-bl-lg'}`}>
+              <div className={`max-w-xs md:max-w-md lg:max-w-xl p-3 rounded-2xl shadow-md ${entry.speaker === 'You' ? 'bg-gradient-to-br from-sky-500 to-blue-600 text-white rounded-br-lg' : 'bg-slate-700 text-slate-100 rounded-bl-lg'}`}>
                 <p className="font-bold text-sm mb-1">{entry.speaker}</p>
                 <p>{entry.text}</p>
               </div>
@@ -298,6 +303,7 @@ const App: React.FC = () => {
         <p className={`text-center transition-opacity duration-300 ${status === 'error' ? 'text-red-400' : 'text-slate-400'}`}>
           {getStatusText()}
         </p>
+        <p className="text-xs text-slate-500 mt-4">Created by Viral Wave</p>
       </footer>
     </div>
   );
